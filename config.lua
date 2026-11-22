@@ -1,6 +1,7 @@
 Config = {}
 
 Config.Locale = 'en' -- 'en' or 'de'
+Config.Framework = 'auto' -- 'auto', 'esx', or 'qbcore'. Auto prefers ESX when both are running.
 -- Enable myFuel tank initialization, fuel type and misfueling data.
 Config.UseMyFuelTankData = true
 

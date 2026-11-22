@@ -1,14 +1,18 @@
 # DaGarage
 
-DaGarage is a FiveM garage for private ESX vehicles and Society fleets. It supports walk-in interiors, persistent parking spaces, location-based retrieval, and optional myFuel and AdvancedParking integration.
+DaGarage is a FiveM garage for private vehicles and Society fleets on ESX or QBCore. It supports walk-in interiors, persistent parking spaces, location-based retrieval, and optional myFuel and AdvancedParking integration.
 
 ## Installation
 
-DaGarage requires OneSync, `oxmysql`, `es_extended`, `DaTuning`, and the standard ESX `owned_vehicles` table. DaGarage creates its missing database columns and tables at startup. If the database account cannot run `ALTER` or `CREATE`, have a database administrator import the missing migrations in order:
+DaGarage requires OneSync, `oxmysql`, `DaTuning`, and a running framework. With `Config.Framework = 'auto'`, DaGarage detects `es_extended` or `qb-core` and prefers ESX when both are running. Set `'esx'` or `'qbcore'` explicitly if needed. Start the selected framework before DaTuning and DaGarage, and use the same framework in DaTuning.
+
+ESX uses the existing `owned_vehicles` table. QBCore uses the standard `player_vehicles` table from qb-vehicleshop. DaGarage creates its missing database columns and tables at startup. If the database account cannot run `ALTER` or `CREATE`, have a database administrator apply the migrations for your framework.
 
 1. [dagarage.sql](dagarage.sql)
 2. [dagarage_slots.sql](dagarage_slots.sql)
 3. [dagarage_garages.sql](dagarage_garages.sql)
+
+For QBCore, apply [dagarage_qbcore.sql](dagarage_qbcore.sql) for the vehicle columns and [dagarage_garages.sql](dagarage_garages.sql) for the admin locations. Apply only the missing columns and indexes on an existing installation. Add custom vehicle models and their types to QBCore Shared Vehicles. DaGarage hands out keys on retrieval when `qb-vehiclekeys` is running and exposes its `GiveKeys` server export.
 
 If you use myFuel, install its `myfuel_vehicle_tanks.sql` migration. If you use AdvancedParking, its resource folder must be named `AdvancedParking`.
 
@@ -20,6 +24,8 @@ ensure DaGarage
 ```
 
 If `ensure [esx_addons]` starts `esx_garage`, add `stop esx_garage` after that group and before starting DaGarage.
+
+On QBCore, stop `qb-garages` if DaGarage replaces it. Both resources can change vehicle storage state.
 
 ## Using a garage
 
@@ -58,7 +64,7 @@ To use a custom MLO, add a profile under `Config.Interiors` with `entry` and `sl
 
 The two default garages are **Vespucci Boulevard** at `(-285.2, -886.5, 31.0)` and **San Andreas Avenue** at `(216.4, -786.6, 30.8)`. Map blips are labeled **Garage**. Edit locations from `config.lua` in that file.
 
-Run `/dagarageadmin` in game to manage database-backed locations. DaGarage checks for the ESX `admin` or `superadmin` group on the server.
+Run `/dagarageadmin` in game to manage database-backed locations. DaGarage checks for the ESX `admin` or `superadmin` group, or the QBCore `admin` or `god` permission, on the server.
 
 1. Choose **Create location** and enter a name.
 2. Choose **Entrance**. Use your current position, walk to the spot and press **E**, or enter `X Y Z`.
@@ -83,16 +89,16 @@ society = {
 
 `minGrade` controls fleet access. `manageGrade` controls parking-space changes and access to **Add vehicle to fleet**. Adding an approved model creates a permanent fleet vehicle with a unique plate at no cost. Omit `manageGrade` to disable that action.
 
-Fleet vehicles use `owner = 'society_<job>'` and `job = '<job>'` in `owned_vehicles`. Existing vehicles with the correct owner and a matching or empty job field are included. Each authorized member sees that location's parked fleet vehicles in a private instance. Private garages remain scoped to their owner.
+On ESX, fleet vehicles use `owner = 'society_<job>'` and `job = '<job>'` in `owned_vehicles`. Existing vehicles with the correct owner and a matching or empty job field are included. On standard QBCore, newly added fleet vehicles use `dagarage_society = 'society_<job>'` with no character owner. Each authorized member sees that location's parked fleet vehicles in a private instance. Private garages remain scoped to their owner.
 
 ## Vehicle persistence
 
-- **DaTuning:** DaGarage saves and restores the current ESX vehicle properties through `owned_vehicles.vehicle`, including mods, paint, wheels, extras, lights, liveries, and damage.
+- **DaTuning:** DaGarage saves and restores vehicle properties through `owned_vehicles.vehicle` on ESX and `player_vehicles.mods` on QBCore, including mods, paint, wheels, extras, lights, liveries, and damage.
 - **Fuel provider:** Edit `Config.GetFuel(vehicle, theme)` and `Config.SetFuel(vehicle, level)` in [config.lua](config.lua). Both hooks run on the client. When parking, DaGarage calls the getter without a theme and saves its first return value, a fuel level from 0 to 100. The setter receives that level when retrieving. Set both hooks to `nil` to use native fuel levels.
 - **myFuel:** The default hooks call the myFuel exports when the resource is running. Set `Config.UseMyFuelTankData = false` to disable myFuel-specific tank initialization, fuel type display, and misfueling data when using another provider.
 - **AdvancedParking:** When running, it manages persistence for vehicles outside. DaGarage removes stored vehicles from the world and AdvancedParking's records when parking. Retrieval checks both live vehicles and known AdvancedParking positions. [AdvancedParking server exports](https://docs.kiminaze.de/scripts/advancedparking/exports-server/)
 
-With `Config.RecoverMissingVehicles`, an ESX vehicle marked `stored = 0` can be recovered when no live vehicle or stored AdvancedParking position is found. Impounded vehicles (`stored = 2`) cannot be retrieved through the garage.
+With `Config.RecoverMissingVehicles`, a vehicle marked outside (`stored = 0` on ESX or `state = 0` on QBCore) can be recovered when no live vehicle or stored AdvancedParking position is found. A value of `2` marks an impounded vehicle.
 
 ## In-game checks
 

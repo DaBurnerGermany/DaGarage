@@ -1,3 +1,6 @@
+local Framework = GarageFramework
+if not Framework.Core then return end
+
 local T = DaGarageText
 
 local activePlayers, activeSpawns = {}, {}
@@ -10,8 +13,32 @@ local changingGarages = {}
 local schemaError
 local schemaReady = false
 local vehicleTypes = { automobile = true, bike = true }
+local isQB = Framework.Name == 'qbcore'
+local vehicleTable = isQB and 'player_vehicles' or 'owned_vehicles'
+local sqlParts = {
+    vehicles = vehicleTable,
+    status = isQB and 'state' or 'stored',
+    props = isQB and 'mods' or 'vehicle',
+    propsMatch = isQB and "BINARY COALESCE(mods, '')" or 'BINARY vehicle',
+    propsRead = isQB and "COALESCE(mods, '') AS vehicle, vehicle AS modelName, hash AS modelHash, fuel, engine, body"
+        or 'vehicle',
+    statusRead = isQB and 'state AS stored' or 'stored',
+    owner = isQB and 'COALESCE(dagarage_society, citizenid)' or 'owner',
+    slotOwner = isQB and 'citizenid' or 'owner'
+}
+
+local DB = {}
+for _, operation in ipairs({ 'query', 'single', 'scalar', 'update', 'insert' }) do
+    DB[operation] = function(statement, parameters)
+        return MySQL[operation].await((statement:gsub('{(%w+)}', sqlParts)), parameters)
+    end
+end
+
 local function fleetScope(alias)
     local prefix = alias and alias .. '.' or ''
+    if isQB then
+        return ("COALESCE(%sdagarage_society, %scitizenid) = ?"):format(prefix, prefix)
+    end
     local owner, job = prefix .. 'owner', prefix .. 'job'
     return owner .. ' = ? AND ' .. prefix .. "type = 'car' AND (COALESCE(" .. job ..
         ", '') = '' OR " .. owner .. " = CONCAT('society_', " .. job .. '))'
@@ -103,6 +130,16 @@ end
 
 local function properties(row)
     local ok, props = pcall(json.decode, row.vehicle or '')
+    if isQB then
+        if not ok or type(props) ~= 'table' then props = {} end
+        ok = true
+        Framework.FromQBProperties(props)
+        props.model = tonumber(row.modelHash) or tonumber(row.modelName)
+            or (row.modelName and row.modelName ~= '' and joaat(row.modelName)) or props.model
+        props.fuelLevel = tonumber(row.fuel) or props.fuelLevel
+        props.engineHealth = tonumber(row.engine) or props.engineHealth
+        props.bodyHealth = tonumber(row.body) or props.bodyHealth
+    end
     if not ok or type(props) ~= 'table' or type(props.model) ~= 'number' or not math.tointeger(props.model) then return end
     props.plate = row.plate
     -- Older ownership records can contain only a model and plate. Do not reroll their paint on each spawn.
@@ -113,7 +150,7 @@ end
 
 local function context(source, garageId)
     local garage = Config.Garages[garageId]
-    local player = ESX.GetPlayerFromId(source)
+    local player = Framework.GetPlayer(source)
     local ped = GetPlayerPed(source)
     if garage and player and ped ~= 0 and GetPlayerRoutingBucket(source) == 0
         and #(GetEntityCoords(ped) - garage.marker) <= Config.InteractionDistance then
@@ -124,7 +161,7 @@ end
 
 local function interiorMember(source, garageId, allowReturn)
     local session = interiorSessions[source]
-    local player = ESX.GetPlayerFromId(source)
+    local player = Framework.GetPlayer(source)
     if session and session.garageId == garageId and player and player.identifier == session.character
         and (allowReturn or GetPlayerRoutingBucket(source) == session.bucket) then
         return session, GetPlayerPed(source), player
@@ -162,8 +199,8 @@ local function garageHasSpace(request, owner, garageId)
     if not lockLayout(request, owner, garageId) then
         return false, T('Die Fahrzeugbelegung wird gerade geändert. Versuche es erneut.')
     end
-    local parked = tonumber(MySQL.scalar.await('SELECT COUNT(*) FROM owned_vehicles WHERE ' .. fleet ..
-        ' AND stored = 1 AND dagarage_location = ?', { owner, garageId }))
+    local parked = tonumber(DB.scalar('SELECT COUNT(*) FROM {vehicles} WHERE ' .. fleet ..
+        ' AND {status} = 1 AND dagarage_location = ?', { owner, garageId }))
     if parked >= capacity then
         return false, (T('Diese Garage ist voll (%d/%d Fahrzeuge).')):format(parked, capacity)
     end
@@ -188,7 +225,7 @@ local function releaseInterior(source)
 end
 
 local function garageCallback(name, action, allowed)
-    ESX.RegisterServerCallback('DaGarage:' .. name, function(source, reply, garageId, ...)
+    Framework.RegisterCallback('DaGarage:' .. name, function(source, reply, garageId, ...)
         if not schemaReady then
             return reply(false, schemaError or T('Die Garagendatenbank wird gerade vorbereitet.'))
         end
@@ -232,8 +269,8 @@ AddEventHandler('onResourceStop', function(resource)
     for source in pairs(interiorSessions) do SetPlayerRoutingBucket(source, 0) end
 end)
 
-ESX.RegisterServerCallback('DaGarage:recoverInterior', function(source, reply)
-    local player = ESX.GetPlayerFromId(source)
+Framework.RegisterCallback('DaGarage:recoverInterior', function(source, reply)
+    local player = Framework.GetPlayer(source)
     if not player or interiorSessions[source] then return reply(false) end
     local saved = interiorReturn(player.identifier)
     if not saved then return reply(false) end
@@ -250,8 +287,8 @@ ESX.RegisterServerCallback('DaGarage:recoverInterior', function(source, reply)
     reply({ garageId = saved.garageId, marker = { x = marker.x, y = marker.y, z = marker.z } })
 end)
 
-ESX.RegisterServerCallback('DaGarage:completeInteriorReturn', function(source, reply, garageId)
-    local player, garage, ped = ESX.GetPlayerFromId(source), Config.Garages[garageId], GetPlayerPed(source)
+Framework.RegisterCallback('DaGarage:completeInteriorReturn', function(source, reply, garageId)
+    local player, garage, ped = Framework.GetPlayer(source), Config.Garages[garageId], GetPlayerPed(source)
     if not player or ped == 0 or interiorSessions[source] or GetPlayerRoutingBucket(source) ~= 0 then return reply(false) end
     local saved = interiorReturn(player.identifier)
     if not saved or saved.garageId ~= garageId then return reply(false) end
@@ -274,8 +311,8 @@ garageCallback('interiorEnter', function(source, garageId, request)
     end
     if GetVehiclePedIsIn(ped, false) ~= 0 then return false, T('Bitte steige zuerst aus.') end
     if not lockLayout(request, owner, garageId) then return false, T('Die Stellplätze werden gerade geladen. Versuche es erneut.') end
-    local rows = MySQL.query.await([[
-        SELECT plate, vehicle, stored, dagarage_slot FROM owned_vehicles
+    local rows = DB.query([[
+        SELECT plate, {propsRead}, {statusRead}, dagarage_slot FROM {vehicles}
         WHERE
     ]] .. fleet .. ' AND dagarage_location = ? ORDER BY plate', { owner, garageId })
     local capacity = Config.GetGarageCapacity(garage)
@@ -291,8 +328,8 @@ garageCallback('interiorEnter', function(source, garageId, request)
         for slot = 1, capacity do
             local parked = occupied[slot]
             if tonumber(parked.stored) ~= 1 then
-                local changed = MySQL.update.await('UPDATE owned_vehicles SET dagarage_slot = NULL WHERE ' .. fields ..
-                    ' AND stored <> 1 AND dagarage_location = ? AND dagarage_slot = ?', { owner, parked.plate, garageId, slot })
+                local changed = DB.update('UPDATE {vehicles} SET dagarage_slot = NULL WHERE ' .. fields ..
+                    ' AND {status} <> 1 AND dagarage_location = ? AND dagarage_slot = ?', { owner, parked.plate, garageId, slot })
                 if changed == 1 then
                     occupied[slot], parked.dagarage_slot = nil, nil
                     return slot
@@ -315,8 +352,8 @@ garageCallback('interiorEnter', function(source, garageId, request)
                 local target, previous = freeSlot(), slot or 0
                 slot = nil
                 if target then
-                    local changed = MySQL.update.await('UPDATE IGNORE owned_vehicles SET dagarage_slot = ? WHERE ' .. fields ..
-                        ' AND stored = 1 AND dagarage_location = ? AND dagarage_slot <=> NULLIF(?, 0)',
+                    local changed = DB.update('UPDATE IGNORE {vehicles} SET dagarage_slot = ? WHERE ' .. fields ..
+                        ' AND {status} = 1 AND dagarage_location = ? AND dagarage_slot <=> NULLIF(?, 0)',
                         { target, owner, row.plate, garageId, previous })
                     if changed == 1 then
                         slot = target
@@ -361,16 +398,16 @@ garageCallback('assignSlot', function(source, garageId, request, plate, slot, pr
     if not lockVehicle(request, plate) then return false, T('Dieses Fahrzeug wird gerade benutzt.') end
     if slot > Config.GetGarageCapacity(garage) then return false, T('Dieser Stellplatz existiert in dieser Garage nicht.') end
     if not lockLayout(request, session.owner, garageId) then return false, T('Die Stellplätze werden gerade geändert.') end
-    local taken = MySQL.scalar.await([[
-        SELECT 1 FROM owned_vehicles WHERE owner = ? AND dagarage_location = ? AND dagarage_slot = ? LIMIT 1
+    local taken = DB.scalar([[
+        SELECT 1 FROM {vehicles} WHERE {owner} = ? AND dagarage_location = ? AND dagarage_slot = ? LIMIT 1
     ]], { session.owner, garageId, slot })
     if taken then return false, T('Dieser Stellplatz ist bereits reserviert.') end
     local current, _, currentPlayer = inside(source, garageId)
     if not current or (garage.society and not accessOwner(currentPlayer, garage, true)) then
         return false, T('Du bist nicht mehr für diese Änderung berechtigt.')
     end
-    local changed = MySQL.update.await('UPDATE IGNORE owned_vehicles SET dagarage_slot = ? WHERE ' .. fields ..
-        ' AND stored = 1 AND dagarage_location = ? AND dagarage_slot = ?', { slot, session.owner, plate, garageId, previousSlot })
+    local changed = DB.update('UPDATE IGNORE {vehicles} SET dagarage_slot = ? WHERE ' .. fields ..
+        ' AND {status} = 1 AND dagarage_location = ? AND dagarage_slot = ?', { slot, session.owner, plate, garageId, previousSlot })
     if changed ~= 1 then return false, T('Der Fahrzeugstand hat sich geändert. Öffne die Garage erneut.') end
     return slot
 end, inside)
@@ -384,17 +421,17 @@ end)
 
 garageCallback('list', function(source, garageId)
     local garage, owner = context(source, garageId)
-    local rows = MySQL.query.await([[
-        SELECT plate, vehicle, stored, dagarage_location FROM owned_vehicles
+    local rows = DB.query([[
+        SELECT plate, {propsRead}, {statusRead}, dagarage_location FROM {vehicles}
         WHERE
     ]] .. fleet .. ' ORDER BY plate', { owner })
     local plates, list = {}, {}
     for _, row in ipairs(rows) do plates[#plates + 1] = row.plate end
     if #plates == 0 then return list end
-    local tanks = Config.UseMyFuelTankData and GetResourceState('myFuel') == 'started' and MySQL.query.await([[
+    local tanks = Config.UseMyFuelTankData and GetResourceState('myFuel') == 'started' and DB.query([[
         SELECT t.plate, t.model, t.required_fuel, t.dispensed_fuel, t.fuel_level, t.drive_seconds_left
         FROM myfuel_vehicle_tanks t
-        JOIN owned_vehicles v ON BINARY t.plate = BINARY UPPER(TRIM(v.plate))
+        JOIN {vehicles} v ON BINARY t.plate = BINARY UPPER(TRIM(v.plate))
         WHERE
     ]] .. fleetScope('v'), { owner }) or {}
     local tankByVehicle = {}
@@ -474,7 +511,7 @@ garageCallback('setFavorite', function(source, garageId, _, plate, favorite)
     end
     local garage, owner = context(source, garageId)
     if garage.society then return false, T('Favoriten sind für private Fahrzeuge verfügbar.') end
-    local row = MySQL.single.await('SELECT plate, vehicle FROM owned_vehicles WHERE ' .. fields, { owner, plate })
+    local row = DB.single('SELECT plate, {propsRead} FROM {vehicles} WHERE ' .. fields, { owner, plate })
     local _, currentOwner = context(source, garageId)
     local props = row and properties(row)
     if not props or owner ~= currentOwner then return false, T('Dieses Fahrzeug ist nicht verfügbar.') end
@@ -486,14 +523,14 @@ end)
 garageCallback('preview', function(source, garageId, _, plate)
     if type(plate) ~= 'string' or #plate > 12 then return false, T('Ungültiges Kennzeichen.') end
     local _, owner = context(source, garageId)
-    local row = MySQL.single.await('SELECT plate, vehicle FROM owned_vehicles WHERE ' .. fields, { owner, plate })
+    local row = DB.single('SELECT plate, {propsRead} FROM {vehicles} WHERE ' .. fields, { owner, plate })
     return (row and properties(row)) or false, T('Für dieses Fahrzeug ist keine Vorschau verfügbar.')
 end)
 
 garageCallback('waypoint', function(source, garageId, _, plate)
     if type(plate) ~= 'string' or #plate > 12 then return false, T('Ungültiges Kennzeichen.') end
     local _, owner = context(source, garageId)
-    local row = MySQL.single.await('SELECT plate, stored, vehicle FROM owned_vehicles WHERE ' .. fields, { owner, plate })
+    local row = DB.single('SELECT plate, {statusRead}, {propsRead} FROM {vehicles} WHERE ' .. fields, { owner, plate })
     local _, currentOwner = context(source, garageId)
     local props = row and properties(row)
     if not props or tonumber(row.stored) == 2 or currentOwner ~= owner then
@@ -523,7 +560,7 @@ local function modelType(model, source)
         result:resolve(kind or false)
     end
     SetTimeout(4500, function() finish(false) end)
-    ESX.GetVehicleType(model, source, finish)
+    Framework.GetVehicleType(model, source, finish)
     return Citizen.Await(result)
 end
 
@@ -549,12 +586,22 @@ garageCallback('societyAddVehicle', function(source, garageId, request, spawnNam
             return false, T('Du hast hier gerade keinen Zugang zum Fuhrpark.')
         end
         local plate = ('DG%06d'):format(math.random(0, 999999))
-        if not savedParkingPosition(plate) then
+        if lockVehicle(request, plate) and not savedParkingPosition(plate)
+            and not DB.scalar('SELECT 1 FROM {vehicles} WHERE plate = ? LIMIT 1', { plate }) then
             local props = json.encode({ model = hash, plate = plate })
-            local added = MySQL.update.await([[
-                INSERT IGNORE INTO owned_vehicles (owner, plate, vehicle, type, job, stored, dagarage_location)
-                VALUES (?, ?, ?, 'car', ?, 1, ?)
-            ]], { owner, plate, props, garage.society.job, garageId })
+            local added
+            if isQB then
+                added = DB.update([[
+                    INSERT IGNORE INTO player_vehicles
+                        (dagarage_society, plate, vehicle, hash, mods, state, dagarage_location)
+                    VALUES (?, ?, ?, ?, ?, 1, ?)
+                ]], { owner, plate, spawnName, tostring(hash), props, garageId })
+            else
+                added = DB.update([[
+                    INSERT IGNORE INTO owned_vehicles (owner, plate, vehicle, type, job, stored, dagarage_location)
+                    VALUES (?, ?, ?, 'car', ?, 1, ?)
+                ]], { owner, plate, props, garage.society.job, garageId })
+            end
             if added == 1 then return plate end
         end
     end
@@ -575,7 +622,7 @@ local function retrieve(source, garageId, request, plate, recovery, quotedFee, f
         return false, T('Bitte steige zuerst aus.')
     end
 
-    local row = MySQL.single.await('SELECT plate, vehicle, stored, dagarage_location FROM owned_vehicles WHERE ' ..
+    local row = DB.single('SELECT plate, {propsRead}, {statusRead}, dagarage_location FROM {vehicles} WHERE ' ..
         fields, { owner, plate })
     local props = row and properties(row)
     if not props then return false, T('Dieses Fahrzeug ist nicht verfügbar.') end
@@ -622,8 +669,8 @@ local function retrieve(source, garageId, request, plate, recovery, quotedFee, f
     end
 
     -- Keep the previous database state if creation fails. Reserve the car before spawning it.
-    if stored == 1 and MySQL.update.await('UPDATE owned_vehicles SET stored = 0 WHERE ' .. fields ..
-        " AND stored = 1 AND BINARY vehicle = ? AND dagarage_location <=> NULLIF(?, '')",
+    if stored == 1 and DB.update('UPDATE {vehicles} SET {status} = 0 WHERE ' .. fields ..
+        " AND {status} = 1 AND {propsMatch} = ? AND dagarage_location <=> NULLIF(?, '')",
         { owner, row.plate, row.vehicle, row.dagarage_location or '' }) ~= 1 then
         return false, T('Der Fahrzeugstand hat sich geändert. Öffne die Garage erneut.')
     end
@@ -633,7 +680,7 @@ local function retrieve(source, garageId, request, plate, recovery, quotedFee, f
         if not ready() then return end
         obstruction = spawnObstruction()
         if obstruction then return end
-        local player = ESX.GetPlayerFromId(source)
+        local player = Framework.GetPlayer(source)
         if fee and fee > 0 and player.getMoney() < fee then
             failure = (T('Du brauchst $%d in bar, um das Fahrzeug hier abzuholen.')):format(fee)
             return
@@ -649,12 +696,13 @@ local function retrieve(source, garageId, request, plate, recovery, quotedFee, f
         state:set('VehicleProperties', props, true)
         local id = NetworkGetNetworkIdFromEntity(vehicle)
         if id == 0 then return end
-        if fee and fee > 0 then player.removeMoney(fee, T('DaGarage Fremdausparken')) end
+        if fee and fee > 0 and player.removeMoney(fee, T('DaGarage Fremdausparken')) == false then return end
         return id
     end)
     if ok and netId and netId ~= 0 then
         local checkout = { entity = vehicle, netId = netId, plate = row.plate, model = props.model & 0xffffffff }
         checkedOut[vehicle] = checkout
+        if Framework.GrantVehicleKeys then Framework.GrantVehicleKeys(source, row.plate) end
         SetTimeout(350, function()
             if checkedOut[vehicle] == checkout and DoesEntityExist(vehicle) and checkoutPlate(vehicle)
                 and normalizedPlate(GetVehicleNumberPlateText(vehicle)) ~= normalizedPlate(checkout.plate) then
@@ -666,8 +714,8 @@ local function retrieve(source, garageId, request, plate, recovery, quotedFee, f
     end
     if vehicle ~= 0 and DoesEntityExist(vehicle) then DeleteEntity(vehicle) end
     if stored == 1 then
-        MySQL.update.await('UPDATE owned_vehicles SET stored = 1 WHERE ' .. fields ..
-            " AND stored = 0 AND dagarage_location <=> NULLIF(?, '')",
+        DB.update('UPDATE {vehicles} SET {status} = 1 WHERE ' .. fields ..
+            " AND {status} = 0 AND dagarage_location <=> NULLIF(?, '')",
             { owner, row.plate, row.dagarage_location or '' })
     end
     if not ok then print(('[DaGarage] Spawn: %s'):format(netId)) end
@@ -772,33 +820,33 @@ garageCallback('store', function(source, garageId, request, netId, condition)
     if hasPassengers() then return false, T('Alle Mitfahrer müssen zuerst aussteigen.') end
     local visiblePlate = normalizedPlate(GetVehicleNumberPlateText(vehicle))
     local canonical = checkoutPlate(vehicle)
-    local selectOwned = 'SELECT plate, vehicle, stored, dagarage_location, dagarage_slot FROM owned_vehicles WHERE '
+    local selectOwned = 'SELECT plate, {propsRead}, {statusRead}, dagarage_location, dagarage_slot FROM {vehicles} WHERE '
     if not lockVehicle(request, canonical or visiblePlate) then return false, T('Dieses Fahrzeug wird gerade benutzt.') end
     local row
     if canonical then
-        row = MySQL.single.await(selectOwned .. fields, { owner, canonical })
+        row = DB.single(selectOwned .. fields, { owner, canonical })
         if not row and visiblePlate ~= '' and visiblePlate ~= normalizedPlate(canonical)
-            and not MySQL.scalar.await('SELECT 1 FROM owned_vehicles WHERE plate = ? LIMIT 1', { canonical }) then
+            and not DB.scalar('SELECT 1 FROM {vehicles} WHERE plate = ? LIMIT 1', { canonical }) then
             -- An external registration can replace the original plate on both the row and the entity.
             canonical = nil
         end
     end
     if not canonical and visiblePlate ~= '' then
         if not lockVehicle(request, visiblePlate) then return false, T('Dieses Fahrzeug wird gerade benutzt.') end
-        row = MySQL.single.await(selectOwned .. fleet .. ' AND TRIM(plate) = ?', { owner, visiblePlate })
+        row = DB.single(selectOwned .. fleet .. ' AND TRIM(plate) = ?', { owner, visiblePlate })
         if not row then
             -- Some plates can return without a space or separator. Only use an unambiguous match.
             local compact = visiblePlate:gsub('[ %-]', '')
             if compact:match('^[A-Z0-9]+$') then
-                local matches = MySQL.query.await([[
-                    SELECT plate FROM owned_vehicles
+                local matches = DB.query([[
+                    SELECT plate FROM {vehicles}
                     WHERE BINARY REPLACE(REPLACE(UPPER(TRIM(plate)), ' ', ''), '-', '') = ?
                     LIMIT 2
                 ]], { compact })
                 if #matches == 1 then
                     local plate = matches[1].plate
                     if not lockVehicle(request, plate) then return false, T('Dieses Fahrzeug wird gerade benutzt.') end
-                    row = MySQL.single.await(selectOwned .. fields, { owner, plate })
+                    row = DB.single(selectOwned .. fields, { owner, plate })
                 end
             end
         end
@@ -831,16 +879,26 @@ garageCallback('store', function(source, garageId, request, netId, condition)
     props.engineHealth = bounded(condition.engine, -4000, 1000) or props.engineHealth
     props.bodyHealth = bounded(condition.body, 0, 1000) or props.bodyHealth
     props.tankHealth = bounded(condition.tank, -4000, 1000) or props.tankHealth
-    local saved = json.encode(props)
+    local saved = json.encode(isQB and Framework.ToQBProperties(props) or props)
     local previousSlot = tonumber(row.dagarage_slot) or 0
     local slot = row.dagarage_location == garageId and previousSlot or 0
-    local changed = MySQL.update.await([[
-        UPDATE owned_vehicles SET stored = 1, vehicle = ?, dagarage_location = ?, dagarage_slot = NULLIF(?, 0) WHERE
-    ]] .. fields .. " AND stored = ? AND BINARY vehicle = ? AND dagarage_location <=> NULLIF(?, '')" ..
+    local updates = '{status} = 1, {props} = ?, dagarage_location = ?, dagarage_slot = NULLIF(?, 0)'
+    local parameters = { saved, garageId, slot }
+    if isQB then
+        updates = updates .. ', fuel = ?, engine = ?, body = ?'
+        parameters[4] = props.fuelLevel or 100
+        parameters[5] = props.engineHealth or 1000
+        parameters[6] = props.bodyHealth or 1000
+    end
+    for _, value in ipairs({ owner, row.plate, row.stored, row.vehicle, row.dagarage_location or '', previousSlot }) do
+        parameters[#parameters + 1] = value
+    end
+    local changed = DB.update('UPDATE {vehicles} SET ' .. updates .. ' WHERE ' ..
+        fields .. " AND {status} = ? AND {propsMatch} = ? AND dagarage_location <=> NULLIF(?, '')" ..
         ' AND dagarage_slot <=> NULLIF(?, 0)',
-        { saved, garageId, slot, owner, row.plate, row.stored, row.vehicle, row.dagarage_location or '', previousSlot })
+        parameters)
     if changed ~= 1 then
-        local current = MySQL.single.await('SELECT stored, vehicle, dagarage_location, dagarage_slot FROM owned_vehicles WHERE ' ..
+        local current = DB.single('SELECT {statusRead}, {propsRead}, dagarage_location, dagarage_slot FROM {vehicles} WHERE ' ..
             fields, { owner, row.plate })
         if not current or tonumber(current.stored) ~= 1 or current.vehicle ~= saved or current.dagarage_location ~= garageId
             or (tonumber(current.dagarage_slot) or 0) ~= slot then
@@ -898,8 +956,8 @@ garageCallback('store', function(source, garageId, request, netId, condition)
     if ok and removed then return true end
     if not ok then print(('[DaGarage] Einparken: %s'):format(removed)) end
     if orphanMode == 2 and not gone() then SetEntityOrphanMode(vehicle, orphanMode) end
-    MySQL.update.await("UPDATE owned_vehicles SET stored = ?, dagarage_location = NULLIF(?, ''), dagarage_slot = NULLIF(?, 0) WHERE " ..
-        fields .. ' AND stored = 1 AND BINARY vehicle = ? AND dagarage_location = ? AND dagarage_slot <=> NULLIF(?, 0)',
+    DB.update("UPDATE {vehicles} SET {status} = ?, dagarage_location = NULLIF(?, ''), dagarage_slot = NULLIF(?, 0) WHERE " ..
+        fields .. ' AND {status} = 1 AND {propsMatch} = ? AND dagarage_location = ? AND dagarage_slot <=> NULLIF(?, 0)',
         { row.stored, row.dagarage_location or '', previousSlot, owner, row.plate, saved, garageId, slot })
     return false, reason or T('FiveM hat das Entfernen des Fahrzeugs nicht bestätigt. Es bleibt ausgeparkt.')
 end)
@@ -947,42 +1005,55 @@ local function publishGarage(record)
 end
 
 local function migrateVehicleSchema()
-    local columns = MySQL.query.await([[
+    local columns = DB.query([[
         SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS
-        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'owned_vehicles'
-          AND COLUMN_NAME IN ('dagarage_location', 'dagarage_slot')
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{vehicles}'
+          AND COLUMN_NAME IN ('dagarage_location', 'dagarage_slot', 'dagarage_society')
     ]])
     local existing = {}
     for _, column in ipairs(columns) do existing[column.name] = true end
     if not existing.dagarage_location then
-        MySQL.query.await('ALTER TABLE owned_vehicles ADD COLUMN dagarage_location VARCHAR(60) NULL')
+        DB.query('ALTER TABLE {vehicles} ADD COLUMN dagarage_location VARCHAR(60) NULL')
     end
     if not existing.dagarage_slot then
-        MySQL.query.await('ALTER TABLE owned_vehicles ADD COLUMN dagarage_slot INT UNSIGNED NULL')
+        DB.query('ALTER TABLE {vehicles} ADD COLUMN dagarage_slot INT UNSIGNED NULL')
     end
-    local index = MySQL.scalar.await([[
+    if isQB and not existing.dagarage_society then
+        DB.query('ALTER TABLE player_vehicles ADD COLUMN dagarage_society VARCHAR(60) NULL')
+    end
+    local index = DB.scalar([[
         SELECT 1 FROM information_schema.STATISTICS
-        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'owned_vehicles'
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{vehicles}'
           AND INDEX_NAME = 'uq_dagarage_owner_location_slot' AND NON_UNIQUE = 0 LIMIT 1
     ]])
     if not index then
-        MySQL.query.await([[
-            ALTER TABLE owned_vehicles ADD UNIQUE KEY uq_dagarage_owner_location_slot
-            (owner, dagarage_location, dagarage_slot)
+        DB.query([[
+            ALTER TABLE {vehicles} ADD UNIQUE KEY uq_dagarage_owner_location_slot
+            ({slotOwner}, dagarage_location, dagarage_slot)
+        ]])
+    end
+    if isQB and not DB.scalar([[
+        SELECT 1 FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'player_vehicles'
+          AND INDEX_NAME = 'uq_dagarage_society_location_slot' AND NON_UNIQUE = 0 LIMIT 1
+    ]]) then
+        DB.query([[
+            ALTER TABLE player_vehicles ADD UNIQUE KEY uq_dagarage_society_location_slot
+            (dagarage_society, dagarage_location, dagarage_slot)
         ]])
     end
 end
 
 local function loadStoredGarages()
-    local tableExists = MySQL.scalar.await([[
+    local tableExists = DB.scalar([[
         SELECT 1 FROM information_schema.TABLES
         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dagarage_garages' LIMIT 1
     ]])
     if not tableExists then
         local migration = assert(LoadResourceFile(GetCurrentResourceName(), 'dagarage_garages.sql'), 'dagarage_garages.sql fehlt')
-        MySQL.query.await(migration)
+        DB.query(migration)
     end
-    local rows = MySQL.query.await('SELECT id, revision, label, definition FROM dagarage_garages')
+    local rows = DB.query('SELECT id, revision, label, definition FROM dagarage_garages')
     for _, row in ipairs(rows) do
         local decoded, definition = pcall(json.decode, row.definition)
         row.definition = decoded and garageDefinition(definition)
@@ -1001,7 +1072,7 @@ MySQL.ready(function()
     local ok, err = pcall(migrateVehicleSchema)
     if not ok then
         schemaError = T('Die Garagendatenbank ist nicht eingerichtet. Bitte informiere einen Admin.')
-        print(('[DaGarage] Fahrzeugmigration fehlgeschlagen. Prüfe owned_vehicles und die ALTER-Berechtigung: %s'):format(err))
+        print(('[DaGarage] Fahrzeugmigration fehlgeschlagen. Prüfe %s und die ALTER-Berechtigung: %s'):format(vehicleTable, err))
         return
     end
     schemaReady = true
@@ -1012,30 +1083,23 @@ MySQL.ready(function()
     end
 end)
 
-ESX.RegisterServerCallback('DaGarage:garageLocations', function(_, reply)
+Framework.RegisterCallback('DaGarage:garageLocations', function(_, reply)
     reply(garageVersion, adminGarages)
 end)
 
-local function isGarageAdmin(source)
-    local player = ESX.GetPlayerFromId(source)
-    if not player then return false end
-    local group = player.getGroup()
-    return group == 'admin' or group == 'superadmin'
-end
-
 RegisterCommand('dagarageadmin', function(source)
     if source == 0 then return end
-    if not isGarageAdmin(source) then
-        return TriggerClientEvent('esx:showNotification', source, T('Du darfst keine Garagen verwalten.'))
+    if not Framework.IsAdmin(source) then
+        return Framework.NotifyPlayer(source, T('Du darfst keine Garagen verwalten.'))
     end
     if not garageStorageReady then
-        return TriggerClientEvent('esx:showNotification', source, T('Garagenverwaltung nicht verfügbar. Prüfe die SQL-Migration.'))
+        return Framework.NotifyPlayer(source, T('Garagenverwaltung nicht verfügbar. Prüfe die SQL-Migration.'))
     end
     TriggerClientEvent('DaGarage:openAdmin', source, garageVersion, adminGarages)
 end, false)
 
-ESX.RegisterServerCallback('DaGarage:adminPosition', function(source, reply)
-    if not isGarageAdmin(source) then return reply(false, T('Du darfst keine Garagen verwalten.')) end
+Framework.RegisterCallback('DaGarage:adminPosition', function(source, reply)
+    if not Framework.IsAdmin(source) then return reply(false, T('Du darfst keine Garagen verwalten.')) end
     local ped = GetPlayerPed(source)
     if ped == 0 or GetPlayerRoutingBucket(source) ~= 0 then
         return reply(false, T('Speichere die Position in der öffentlichen Spielwelt.'))
@@ -1055,28 +1119,28 @@ local function garageInUse(key)
 end
 
 local function changeGarage(source, action, record, label, definition)
-    if not isGarageAdmin(source) then return false, T('Du darfst keine Garagen verwalten.') end
+    if not Framework.IsAdmin(source) then return false, T('Du darfst keine Garagen verwalten.') end
     local key = record and garageKey(record.id)
     if action == 'delete' then
-        local removed = MySQL.update.await([[
+        local removed = DB.update([[
             DELETE FROM dagarage_garages WHERE id = ? AND revision = ?
-                AND NOT EXISTS (SELECT 1 FROM owned_vehicles WHERE dagarage_location = ?)
+                AND NOT EXISTS (SELECT 1 FROM {vehicles} WHERE dagarage_location = ?)
         ]], { record.id, record.revision, key })
         if removed ~= 1 then return false, T('Der Standort hat sich geändert oder ihm sind noch Fahrzeuge zugeordnet.') end
         adminGarages[key], Config.Garages[key] = nil, nil
     elseif record then
         local societyChanged = record.definition.society ~= definition.society
-        local updated = MySQL.update.await([[
+        local updated = DB.update([[
             UPDATE dagarage_garages SET label = ?, definition = ?, revision = revision + 1
             WHERE id = ? AND revision = ?
-                AND (? = 0 OR NOT EXISTS (SELECT 1 FROM owned_vehicles WHERE dagarage_location = ?))
+                AND (? = 0 OR NOT EXISTS (SELECT 1 FROM {vehicles} WHERE dagarage_location = ?))
         ]], { label, json.encode(definition), record.id, record.revision, societyChanged and 1 or 0, key })
         if updated ~= 1 then
             return false, T('Der Standort hat sich geändert oder der Fuhrpark ist durch Fahrzeugzuordnungen belegt.')
         end
         publishGarage({ id = record.id, revision = record.revision + 1, label = label, definition = definition })
     else
-        local id = MySQL.insert.await('INSERT INTO dagarage_garages (label, definition) VALUES (?, ?)',
+        local id = DB.insert('INSERT INTO dagarage_garages (label, definition) VALUES (?, ?)',
             { label, json.encode(definition) })
         if not id or id < 1 then return false, T('Der Standort konnte nicht gespeichert werden.') end
         if Config.Garages[garageKey(id)] then return false, T('Der Standortschlüssel kollidiert mit der Konfiguration.') end
@@ -1087,8 +1151,8 @@ local function changeGarage(source, action, record, label, definition)
     return { version = garageVersion, records = adminGarages }
 end
 
-ESX.RegisterServerCallback('DaGarage:adminSave', function(source, reply, payload)
-    if not isGarageAdmin(source) then return reply(false, T('Du darfst keine Garagen verwalten.')) end
+Framework.RegisterCallback('DaGarage:adminSave', function(source, reply, payload)
+    if not Framework.IsAdmin(source) then return reply(false, T('Du darfst keine Garagen verwalten.')) end
     if not garageStorageReady then return reply(false, T('Garagenverwaltung nicht verfügbar. Prüfe die SQL-Migration.')) end
     if type(payload) ~= 'table' then return reply(false, T('Ungültige Änderung.')) end
     local action, id, revision, label = payload.action, payload.id, payload.revision, payload.label

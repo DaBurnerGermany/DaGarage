@@ -1,3 +1,6 @@
+local Framework = GarageFramework
+if not Framework.Core then return end
+
 local T = DaGarageText
 
 local Menu = (function()
@@ -132,7 +135,7 @@ local statuses = {
 local function dispatch(action, garageId, callback, ...)
     if busy then return end
     busy = true
-    ESX.TriggerServerCallback('DaGarage:' .. action, function(result, message)
+    Framework.TriggerCallback('DaGarage:' .. action, function(result, message)
         busy = false
         callback(result, message)
     end, garageId, ...)
@@ -140,7 +143,7 @@ end
 
 local function request(action, garageId, callback, ...)
     dispatch(action, garageId, function(result, message)
-        if not result then return ESX.ShowNotification(message or T('Die Garage ist momentan nicht verfügbar.')) end
+        if not result then return Framework.Notify(message or T('Die Garage ist momentan nicht verfügbar.')) end
         callback(result)
     end, ...)
 end
@@ -149,7 +152,7 @@ local function canUseGarage(garage, manage)
     local society = garage.society
     if not society then return not manage end
     if manage and type(society.manageGrade) ~= 'number' then return false end
-    local job = ESX.GetPlayerData().job
+    local job = Framework.GetPlayerData().job
     local minimum = math.max(society.minGrade or 0, manage and society.manageGrade or 0)
     return job and job.name == society.job and (tonumber(job.grade) or -1) >= minimum
 end
@@ -168,7 +171,7 @@ local function applySavedPaint(vehicle, props)
 end
 
 local function applyGarageProperties(vehicle, props)
-    ESX.Game.SetVehicleProperties(vehicle, props)
+    Framework.SetVehicleProperties(vehicle, props)
     applySavedPaint(vehicle, props)
     SetVehicleModKit(vehicle, 0)
     if props.modSmokeEnabled == false then ToggleVehicleMod(vehicle, 20, false) end
@@ -210,7 +213,7 @@ local function enterVehicle(spawned, finish)
                                 end
                             end
                         end)
-                        ESX.ShowNotification(T('Fahrzeug ausgeparkt.'))
+                        Framework.Notify(T('Fahrzeug ausgeparkt.'))
                         if finish then finish() end
                         return
                     elseif GetGameTimer() >= nextControlRequest then
@@ -221,7 +224,7 @@ local function enterVehicle(spawned, finish)
             end
             Wait(50)
         end
-        ESX.ShowNotification(T('Dein Fahrzeug wurde ausgeparkt. Du findest es an der Ausfahrt.'))
+        Framework.Notify(T('Dein Fahrzeug wurde ausgeparkt. Du findest es an der Ausfahrt.'))
         if finish then finish() end
     end)
 end
@@ -409,7 +412,7 @@ local function openPreview(garageId, plate, title)
         if preview ~= current then return end
         if room == 0 or not IsInteriorReady(room) then
             closePreview()
-            return ESX.ShowNotification(T('Der Vorschauplatz konnte nicht geladen werden.'))
+            return Framework.Notify(T('Der Vorschauplatz konnte nicht geladen werden.'))
         end
         local vehicle = localVehicle(props, point)
         if preview ~= current or not Menu.get(detailMenu) then
@@ -419,7 +422,7 @@ local function openPreview(garageId, plate, title)
         end
         if not vehicle then
             closePreview()
-            return ESX.ShowNotification(T('Die Fahrzeugvorschau konnte nicht geladen werden.'))
+            return Framework.Notify(T('Die Fahrzeugvorschau konnte nicht geladen werden.'))
         end
         current.vehicle = vehicle
         FreezeEntityPosition(vehicle, true)
@@ -493,7 +496,7 @@ local function showPage(session, page)
         end
         session.loading = false
         if placementFailed then
-            ESX.ShowNotification(T('Ein Fahrzeug konnte im Innenraum nicht abgestellt werden. Du findest es in der Liste am Eingang.'))
+            Framework.Notify(T('Ein Fahrzeug konnte im Innenraum nicht abgestellt werden. Du findest es in der Liste am Eingang.'))
         end
     end)
 end
@@ -522,7 +525,7 @@ local function finishInterior(session, spawned)
     local function finish()
         DoScreenFadeIn(140)
         SetTimeout(800, function()
-            ESX.TriggerServerCallback('DaGarage:completeInteriorReturn', function() end, session.garageId)
+            Framework.TriggerCallback('DaGarage:completeInteriorReturn', function() end, session.garageId)
         end)
     end
     if spawned then enterVehicle(spawned, finish) else finish() end
@@ -540,7 +543,7 @@ local function exitInterior(session, plate, display)
             if display and DoesEntityExist(display) then FreezeEntityPosition(display, false) end
             session.transitioning = false
             DoScreenFadeIn(140)
-            return ESX.ShowNotification(message or T('Die Ausfahrt ist gerade nicht verfügbar.'))
+            return Framework.Notify(message or T('Die Ausfahrt ist gerade nicht verfügbar.'))
         end
         local remaining = fadeEnd - GetGameTimer()
         if remaining > 0 then Wait(remaining) end
@@ -573,7 +576,7 @@ local function enterInterior(garageId, profile)
         local loaded = movePed(entry, true)
         session.transitioning = false
         if not loaded then
-            ESX.ShowNotification(T('Der Garageninnenraum konnte nicht geladen werden.'))
+            Framework.Notify(T('Der Garageninnenraum konnte nicht geladen werden.'))
             return exitInterior(session)
         end
         local firstPage = 1
@@ -628,7 +631,7 @@ local function openSlotPicker(session, props, parent)
         end
     end
     if #options == 0 then
-        return ESX.ShowNotification(T('Alle Stellplätze sind belegt oder reserviert.'))
+        return Framework.Notify(T('Alle Stellplätze sind belegt oder reserviert.'))
     end
     Menu.open('assign_slot', {
         title = T('Freie Stellplätze'),
@@ -645,7 +648,7 @@ local function openSlotPicker(session, props, parent)
             picker.close()
             parent.close()
             showPage(session, math.ceil(newSlot / capacity))
-            ESX.ShowNotification((T('Stellplatz %d gespeichert.')):format(newSlot))
+            Framework.Notify((T('Stellplatz %d gespeichert.')):format(newSlot))
         end, props.plate, selection.current.value, oldSlot)
     end)
 end
@@ -812,14 +815,14 @@ local function openDetails(garageId, vehicle, title, listMenu, refreshList)
         if action == 'retrieve' and not busy then
             local spawn = Config.Garages[garageId] and Config.Garages[garageId].spawn
             if spawn and IsAnyVehicleNearPoint(spawn.x, spawn.y, spawn.z, Config.SpawnClearance) then
-                return ESX.ShowNotification(T('Am Ausparkpunkt steht bereits ein Fahrzeug.'))
+                return Framework.Notify(T('Am Ausparkpunkt steht bereits ein Fahrzeug.'))
             end
             Menu.closeAll()
             request('retrieve', garageId, enterVehicle, vehicle.plate, recover, vehicle.remoteFee)
         elseif action == 'waypoint' then
             request('waypoint', garageId, function(position)
                 SetNewWaypoint(position.x + 0.0, position.y + 0.0)
-                ESX.ShowNotification(T('Wegpunkt zum Fahrzeug gesetzt.'))
+                Framework.Notify(T('Wegpunkt zum Fahrzeug gesetzt.'))
             end, vehicle.plate)
         elseif action == 'preview' then
             openPreview(garageId, vehicle.plate, title)
@@ -856,7 +859,7 @@ local function openSocietyModels(garageId, garage)
     }, function(data)
         request('societyAddVehicle', garageId, function(plate)
             Menu.closeAll()
-            ESX.ShowNotification((T('Fahrzeug %s wurde im Fuhrpark eingeparkt.')):format(plate))
+            Framework.Notify((T('Fahrzeug %s wurde im Fuhrpark eingeparkt.')):format(plate))
         end, data.current.value)
     end, function(_, menu) menu.close() end)
 end
@@ -1142,13 +1145,13 @@ local function handleInterior(session, ped)
     else
         session.driveOut = nil
     end
-    if #help > 0 then ESX.ShowHelpNotification(table.concat(help, '  ·  ')) end
+    if #help > 0 then Framework.Help(table.concat(help, '  ·  ')) end
 end
 
 local function storeVehicle(garageId, vehicle)
-    if not NetworkGetEntityIsNetworked(vehicle) then return ESX.ShowNotification(T('Ungültiges Fahrzeug.')) end
-    local properties = ESX.Game.GetVehicleProperties(vehicle)
-    if not properties then return ESX.ShowNotification(T('Die Fahrzeugdaten konnten nicht gelesen werden.')) end
+    if not NetworkGetEntityIsNetworked(vehicle) then return Framework.Notify(T('Ungültiges Fahrzeug.')) end
+    local properties = Framework.GetVehicleProperties(vehicle)
+    if not properties then return Framework.Notify(T('Die Fahrzeugdaten konnten nicht gelesen werden.')) end
     -- Explicit false lets the server distinguish removed custom paint from an older snapshot.
     properties.customPrimaryColor = properties.customPrimaryColor or false
     properties.customSecondaryColor = properties.customSecondaryColor or false
@@ -1161,7 +1164,7 @@ local function storeVehicle(garageId, vehicle)
         end
     end
     request('store', garageId, function()
-        ESX.ShowNotification(T('Fahrzeug eingeparkt.'))
+        Framework.Notify(T('Fahrzeug eingeparkt.'))
     end, VehToNet(vehicle), {
         fuel = fuel,
         engine = GetVehicleEngineHealth(vehicle),
@@ -1218,7 +1221,7 @@ RegisterNetEvent('DaGarage:garageLocations', function(version, records)
 end)
 
 local function loadGarageLocations()
-    ESX.TriggerServerCallback('DaGarage:garageLocations', applyGarageLocations)
+    Framework.TriggerCallback('DaGarage:garageLocations', applyGarageLocations)
 end
 
 local openAdminList
@@ -1226,9 +1229,9 @@ local openAdminList
 local function adminRequest(action, callback, ...)
     if adminBusy then return end
     adminBusy = true
-    ESX.TriggerServerCallback('DaGarage:' .. action, function(result, message)
+    Framework.TriggerCallback('DaGarage:' .. action, function(result, message)
         adminBusy = false
-        if result then callback(result) else ESX.ShowNotification(message or T('Die Änderung ist fehlgeschlagen.')) end
+        if result then callback(result) else Framework.Notify(message or T('Die Änderung ist fehlgeschlagen.')) end
     end, ...)
 end
 
@@ -1279,7 +1282,7 @@ local function openAdminEditor(draft)
             applyGarageLocations(snapshot.version, snapshot.records)
             if confirm then confirm.close() end
             editor.close()
-            ESX.ShowNotification(action == 'delete' and T('Standort gelöscht.') or T('Standort gespeichert.'))
+            Framework.Notify(action == 'delete' and T('Standort gelöscht.') or T('Standort gespeichert.'))
             openAdminList()
         end, {
             action = action, id = draft.id, revision = draft.revision,
@@ -1339,7 +1342,7 @@ local function openAdminEditor(draft)
                     if state == 1 then
                         local parsed = parseAdminPosition(GetOnscreenKeyboardResult() or '', field == 'spawn')
                         if parsed then return applyPoint(parsed) end
-                        ESX.ShowNotification(T('Ungültige Koordinaten. Trenne die Werte mit Leerzeichen.'))
+                        Framework.Notify(T('Ungültige Koordinaten. Trenne die Werte mit Leerzeichen.'))
                     end
                     openAdminEditor(draft)
                 end)
@@ -1417,7 +1420,7 @@ openAdminList = function()
             return openAdminEditor({ label = '', definition = { interior = 'gta' } })
         end
         local record = databaseGarages[id]
-        if not record then return ESX.ShowNotification(T('Dieser Standort wird in config.lua verwaltet.')) end
+        if not record then return Framework.Notify(T('Dieser Standort wird in config.lua verwaltet.')) end
         menu.close()
         openAdminEditor({
             id = record.id, revision = record.revision, label = record.label,
@@ -1445,7 +1448,7 @@ CreateThread(function()
         local ped = PlayerPedId()
         if adminPlacement then
             local placement = adminPlacement
-            ESX.ShowHelpNotification(T('~INPUT_CONTEXT~ Position übernehmen  ·  ~INPUT_FRONTEND_PAUSE_ALTERNATE~ Abbrechen'))
+            Framework.Help(T('~INPUT_CONTEXT~ Position übernehmen  ·  ~INPUT_FRONTEND_PAUSE_ALTERNATE~ Abbrechen'))
             DisableControlAction(0, 200, true)
             if not adminBusy and IsDisabledControlJustReleased(0, 200) then
                 adminPlacement = nil
@@ -1495,14 +1498,14 @@ CreateThread(function()
                     help = help .. '  ·  ~INPUT_DETONATE~ Garage betreten'
                     DisableControlAction(0, 47, true)
                 end
-                ESX.ShowHelpNotification(help)
+                Framework.Help(help)
                 if IsControlJustReleased(0, 38) then
                     openGarage(nearest, garage)
                 elseif profile and IsDisabledControlJustReleased(0, 47) then
                     enterInterior(nearest, profile)
                 end
             elseif GetPedInVehicleSeat(vehicle, -1) == ped then
-                ESX.ShowHelpNotification(T('~INPUT_CONTEXT~ Fahrzeug einparken'))
+                Framework.Help(T('~INPUT_CONTEXT~ Fahrzeug einparken'))
                 if IsControlJustReleased(0, 38) then storeVehicle(nearest, vehicle) end
             end
         end
@@ -1530,7 +1533,7 @@ end)
 
 local function recoverInterior()
     if interior then return end
-    ESX.TriggerServerCallback('DaGarage:recoverInterior', function(saved)
+    Framework.TriggerCallback('DaGarage:recoverInterior', function(saved)
         if saved and not interior then finishInterior({ garageId = saved.garageId, marker = saved.marker, display = {} }) end
     end)
 end
@@ -1545,8 +1548,15 @@ RegisterCommand('garageverlassen', function()
     end
 end, false)
 
-AddEventHandler('esx:onPlayerSpawn', function() SetTimeout(1500, recoverInterior) end)
-AddEventHandler('esx:playerLoaded', loadGarageLocations)
+if Framework.Name == 'qbcore' then
+    RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
+        loadGarageLocations()
+        SetTimeout(1500, recoverInterior)
+    end)
+else
+    AddEventHandler('esx:onPlayerSpawn', function() SetTimeout(1500, recoverInterior) end)
+    RegisterNetEvent('esx:playerLoaded', loadGarageLocations)
+end
 CreateThread(function()
-    if ESX.IsPlayerLoaded() then recoverInterior() end
+    if Framework.IsPlayerLoaded() then recoverInterior() end
 end)
