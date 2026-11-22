@@ -2,22 +2,6 @@
 
 DaGarage is a FiveM garage for private ESX vehicles and Society fleets. It supports walk-in interiors, persistent parking spaces, location-based retrieval, and optional myFuel and AdvancedParking integration.
 
-## Screenshots
-
-### Garage entrance
-
-![English garage entrance with options to enter or browse vehicles](docs/images/garage-entrance.png)
-
-### Vehicle list
-
-![English vehicle list with favorites, plate, fuel level, and vehicle condition](docs/images/vehicle-list.png)
-
-### Admin editor
-
-![English admin editor with location coordinates, interior, capacity, and fleet settings](docs/images/admin-editor.png)
-
-Screenshots show the DaGarage NUI rendered with example data.
-
 ## Installation
 
 DaGarage requires OneSync, `oxmysql`, `es_extended`, `DaTuning`, and the standard ESX `owned_vehicles` table. DaGarage creates its missing database columns and tables at startup. If the database account cannot run `ALTER` or `CREATE`, have a database administrator import the missing migrations in order:
@@ -123,3 +107,35 @@ Need help, found a bug, or have a question?
 Join our Discord server for support!
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/Cxfe2y8TJ)
+
+## Screenshots
+
+### Small garage
+
+![Two parked vehicles in the small garage interior](docs/images/garage-small.png)
+
+### Medium garage
+
+![Parked vehicles and workbenches in the medium garage interior](docs/images/garage-medium.png)
+
+### GTA garage interior
+
+![Parked vehicles in the white GTA garage interior](docs/images/garage-ten-car-interior.png)
+
+### In-game vehicle information
+
+![Vehicle information displayed above a parked Contender](docs/images/vehicle-look.png)
+
+![Vehicle details menu showing the model, manufacturer, and saved fuel level](docs/images/vehicle-details-ingame.png)
+
+![Menu for selecting an available parking space](docs/images/parking-space-selection.png)
+
+### Menu examples
+
+These DaGarage NUI screenshots use example data.
+
+![English garage entrance with options to enter or browse vehicles](docs/images/garage-entrance.png)
+
+![English vehicle list with favorites, plate, fuel level, and vehicle condition](docs/images/vehicle-list.png)
+
+![English admin editor with location coordinates, interior, capacity, and fleet settings](docs/images/admin-editor.png)
