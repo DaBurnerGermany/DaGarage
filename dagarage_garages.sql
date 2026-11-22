@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS `dagarage_garages` (
+    `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `revision` INT UNSIGNED NOT NULL DEFAULT 1,
+    `label` VARCHAR(100) NOT NULL,
+    `definition` LONGTEXT NOT NULL,
+    PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

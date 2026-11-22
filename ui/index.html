@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DaGarage</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="app.js" defer></script>
+</head>
+<body>
+    <main id="garage" class="garage" hidden aria-labelledby="title">
+        <header class="topbar">
+            <div class="brand">
+                <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+                <span>Da<span class="brand-accent">Garage</span></span>
+            </div>
+            <button id="back" type="button" class="close-button" aria-label="Schließen">×</button>
+        </header>
+        <div class="heading">
+            <p id="subtitle" class="subtitle"></p>
+            <h1 id="title"></h1>
+        </div>
+        <div id="content" class="content"></div>
+        <footer class="footer">
+            <span><kbd>↑</kbd> <kbd>↓</kbd> <span data-text="Auswahl">Auswahl</span></span>
+            <span><kbd>↵</kbd> <span data-text="Öffnen">Öffnen</span></span>
+            <span><kbd>Esc</kbd> <span id="escape-label">Schließen</span></span>
+        </footer>
+    </main>
+    <aside id="vehicle-look" class="vehicle-look" hidden aria-label="Fahrzeugdaten">
+        <div class="look-heading">
+            <div>
+                <p id="look-make" class="look-muted"></p>
+                <p id="look-model" class="look-model"></p>
+            </div>
+            <span id="look-plate" class="look-plate"></span>
+        </div>
+        <p id="look-details" class="look-muted"></p>
+        <p class="look-hint"><kbd>H</kbd> <span data-text="Fahrzeugdetails">Fahrzeugdetails</span></p>
+    </aside>
+</body>
+</html>
